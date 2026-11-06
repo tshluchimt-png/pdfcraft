@@ -600,10 +600,9 @@ fn plural_counts() -> impl Iterator<Item = u64> {
     (0..=200).chain([1000, 1001, 1002, 1003, 1011, 1012, 1021, 1100, 1_000_000, 1_000_001, 2_000_000, 123_456_789, u64::MAX - 13, u64::MAX])
 }
 
-/// craft-i18n picks plural forms by CLDR category, PdfCraft by its own rules: for every language
-/// the two choose the same form wherever they list as many forms. Where CLDR lists more (Hindi
-/// and Turkish have two where PdfCraft had one), the catalog repeats the form, so the text is the
-/// same; the embedded rows are checked for that and any that differ are reported.
+/// craft-i18n picks plural forms by CLDR category, PdfCraft by its older rules. Hebrew has three
+/// CLDR forms where PdfCraft had two; Turkish and Hindi have two where PdfCraft had one. The
+/// catalogs are checked for the repeated forms that keep the older wording.
 #[test]
 fn plural_forms_follow_the_rules_pdfcraft_had() {
     let mut split = Vec::new();
@@ -621,7 +620,8 @@ fn plural_forms_follow_the_rules_pdfcraft_had() {
             (1..=6).map(|f| (f, fixture(f))).find(|(_, l)| trn(*l, 5, "{n} x", "{n} xs").starts_with('F')).expect("a form count loads");
         if forms != pdfcraft_forms {
             split.push((info.code, pdfcraft_forms, forms));
-            assert_eq!(pdfcraft_forms, 1, "{}: PdfCraft listed {pdfcraft_forms} forms, CLDR {forms}", info.code);
+            let expected_pdfcraft_forms = if info.code == "he" { 2 } else { 1 };
+            assert_eq!(pdfcraft_forms, expected_pdfcraft_forms, "{}: PdfCraft listed {pdfcraft_forms} forms, CLDR {forms}", info.code);
             continue;
         }
         for n in plural_counts() {
@@ -629,16 +629,22 @@ fn plural_forms_follow_the_rules_pdfcraft_had() {
         }
     }
     let codes: Vec<&str> = split.iter().map(|(c, ..)| *c).collect();
-    assert_eq!(codes, ["tr", "hi"], "the languages CLDR gives more forms than PdfCraft had");
+    assert_eq!(codes, ["he", "tr", "hi"], "the languages CLDR gives more forms than PdfCraft had");
     if !needs_catalogs() {
         return;
     }
     for (code, ..) in split {
         let lang = Lang::from_code(code).expect("registered");
-        for (_, source, forms) in lang.catalog_texts().flat_map(rows).filter(|(c, ..)| c == "@plural") {
-            let distinct: std::collections::BTreeSet<&str> = forms.split('|').collect();
-            if distinct.len() > 1 {
-                println!("{code}: {source:?} has forms that differ, so PdfCraft's single form is no longer the only text: {forms:?}");
+        for (_, source, translations) in lang.catalog_texts().flat_map(rows).filter(|(c, ..)| c == "@plural") {
+            let forms: Vec<&str> = translations.split('|').collect();
+            if code == "he" {
+                assert_eq!(forms.len(), 3, "Hebrew CLDR categories should have three catalog forms: {source:?}");
+                assert_eq!(forms[1], forms[2], "Hebrew 'two' and 'other' use the same wording: {source:?}");
+            } else {
+                let distinct: std::collections::BTreeSet<&str> = forms.iter().copied().collect();
+                if distinct.len() > 1 {
+                    println!("{code}: {source:?} has forms that differ, so PdfCraft's single form is no longer the only text: {translations:?}");
+                }
             }
         }
     }
